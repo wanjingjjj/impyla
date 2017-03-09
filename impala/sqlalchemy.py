@@ -22,7 +22,13 @@ from sqlalchemy.dialects import registry
 from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.sql.compiler import IdentifierPreparer, GenericTypeCompiler
 from sqlalchemy.types import (BOOLEAN, SMALLINT, BIGINT, TIMESTAMP, FLOAT,
-                              DECIMAL, Integer, Float, String)
+                              DECIMAL, Integer, Float, String, DATE)
+
+from sqlalchemy.sql import compiler
+try:
+    from sqlalchemy.sql.compiler import SQLCompiler
+except ImportError:
+    from sqlalchemy.sql.compiler import DefaultCompiler as SQLCompiler
 
 
 registry.register('impala', 'impala.sqlalchemy', 'ImpalaDialect')
@@ -59,6 +65,11 @@ class ImpalaTypeCompiler(GenericTypeCompiler):
     def visit_STRING(self, type_):
         return 'STRING'
 
+    def visit_TEXT(self, type_):
+        return 'STRING'
+
+    def visit_DATETIME(self, type_):
+        return 'TIMESTAMP'
 
 class ImpalaIdentifierPreparer(IdentifierPreparer):
     # https://github.com/cloudera/Impala/blob/master/fe/src/main/jflex/sql-scanner.flex
@@ -100,13 +111,43 @@ _impala_type_to_sqlalchemy_type = {
     'BOOLEAN': BOOLEAN,
     'TINYINT': TINYINT,
     'SMALLINT': SMALLINT,
-    'INT': INT,
+    'INT': Integer,
     'BIGINT': BIGINT,
+    'DATE': DATE,
     'TIMESTAMP': TIMESTAMP,
     'FLOAT': FLOAT,
-    'DOUBLE': DOUBLE,
+    'DOUBLE': FLOAT,
+    'VARCHAR': STRING,
     'STRING': STRING,
     'DECIMAL': DECIMAL}
+
+class ImpalaCompiler(SQLCompiler):
+    def visit_concat_op_binary(self, binary, operator, **kw):
+        return "concat(%s, %s)" % (self.process(binary.left), self.process(binary.right))
+
+    def visit_insert(self, *args, **kwargs):
+        result = super(ImpalaCompiler, self).visit_insert(*args, **kwargs)
+        # Massage the result into Hive's format
+        #   INSERT INTO `pyhive_test_database`.`test_table` (`a`) SELECT ...
+        #   =>
+        #   INSERT INTO TABLE `pyhive_test_database`.`test_table` SELECT ...
+        regex = r'^(INSERT INTO) ([^\s]+) \([^\)]*\)'
+        assert re.search(regex, result), "Unexpected visit_insert result: {}".format(result)
+        return re.sub(regex, r'\1 TABLE \2', result)
+
+    def visit_column(self, *args, **kwargs):
+        result = super(ImpalaCompiler, self).visit_column(*args, **kwargs)
+        dot_count = result.count('.')
+        assert dot_count in (0, 1, 2), "Unexpected visit_column result {}".format(result)
+        if dot_count == 2:
+            # we have something of the form schema.table.column
+            # hive doesn't like the schema in front, so chop it out
+            result = result[result.index('.') + 1:]
+        return result
+
+    def visit_char_length_func(self, fn, **kw):
+        return 'length{}'.format(self.function_argspec(fn, **kw))
+
 
 
 class ImpalaDialect(DefaultDialect):
@@ -124,6 +165,7 @@ class ImpalaDialect(DefaultDialect):
     supports_default_values = False
     returns_unicode_strings = True
     type_compiler = ImpalaTypeCompiler
+    statement_compiler = ImpalaCompiler
 
     @classmethod
     def dbapi(cls):

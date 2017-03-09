@@ -184,7 +184,11 @@ class HiveServer2Cursor(Cursor):
             log.debug('description=None has_result_set=True => getting schema')
 
             schema = self._last_operation.get_result_schema()
-            self._description = schema
+            schema_clean = []
+            for (col_name, _junk1, _junk2, _junk3, _junk4, _junk5, _junk6) in schema:
+                col_name = re.sub(r'^.*\.', '', col_name)
+                schema_clean.append((col_name, _junk1, _junk2, _junk3, _junk4, _junk5, _junk6))
+            self._description = schema_clean
         return self._description
 
     @property
