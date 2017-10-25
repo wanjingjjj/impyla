@@ -431,11 +431,28 @@ class HiveServer2Cursor(Cursor):
     def executemany(self, operation, seq_of_parameters):
         # PEP 249
         log.debug('Attempting to execute %s queries', len(seq_of_parameters))
-        for parameters in seq_of_parameters:
-            self.execute(operation, parameters)
-            if self.has_result_set:
-                raise ProgrammingError("Operations that have result sets are "
-                                       "not allowed with executemany.")
+
+        regex = r'^INSERT INTO TABLE.*VALUES'
+        if re.search(regex, operation):
+            # doing a bulk insert
+            log.debug("bulk insert detected")
+            row_per_operation = 1000
+        else:
+            row_per_operation = 1
+
+        total_rows = len(seq_of_parameters)
+        i = 0
+
+        parameters = []
+        for parameter in seq_of_parameters:
+            parameters.append(parameter)
+            i += 1
+            if len(parameters) == row_per_operation or i == total_rows:
+                self.execute(operation, parameters)
+                parameters = []
+                if self.has_result_set:
+                    raise ProgrammingError("Operations that have result sets are "
+                                           "not allowed with executemany.")
 
     def fetchone(self):
         # PEP 249

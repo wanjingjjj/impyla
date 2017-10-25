@@ -238,31 +238,42 @@ def _bind_parameters_list(operation, parameters):
 
 
 def _bind_parameters_dict(operation, parameters):
-    string_parameters = {}
-    for (name, value) in six.iteritems(parameters):
-        if value is None:
-            string_parameters[name] = 'NULL'
-        elif isinstance(value, six.string_types):
-            string_parameters[name] = "'" + _escape(value) + "'"
-        elif isinstance(value, datetime.date):
-            string_parameters[name] = "'{0}'".format(value)
-        else:
-            string_parameters[name] = str(value)
 
     # replace named parameters by their pyformat equivalents
     operation = re.sub(":([^\d\W]\w*)", "%(\g<1>)s", operation)
 
-    # replace pyformat parameters
-    return operation % string_parameters
+    operations = []
+    for parameter in parameters:
+        string_parameters = {}
+        for (name, value) in six.iteritems(parameter):
+            if value is None:
+                string_parameters[name] = 'NULL'
+            elif isinstance(value, six.string_types):
+                string_parameters[name] = "'" + _escape(value) + "'"
+            elif isinstance(value, datetime.date):
+                string_parameters[name] = "'{0}'".format(value)
+            else:
+                string_parameters[name] = str(value)
 
+        # replace pyformat parameters
+        operations.append(operation % string_parameters)
+
+    if len(operations) == 1:
+        return operations[0]
+    else:
+        return re.sub(",INSERT INTO TABLE[^\(]+",",",','.join(operations))
 
 def _bind_parameters(operation, parameters):
     # If parameters is a list, assume either qmark, format, or numeric
     # format. If not, assume either named or pyformat parameters
-    if isinstance(parameters, (list, tuple)):
-        return _bind_parameters_list(operation, parameters)
-    elif isinstance(parameters, dict):
-        return _bind_parameters_dict(operation, parameters)
-    else:
-        raise ProgrammingError("Query parameters argument should be a "
-                               "list, tuple, or dict object")
+
+    # now parameter is always a list
+    # if parameters is a list of dict, we are doing a bulk insert
+    for parameter in parameters:
+        if isinstance(parameter, (list, tuple)):
+            return _bind_parameters_list(operation, parameters)
+        elif isinstance(parameter, dict):
+            return _bind_parameters_dict(operation, parameters)
+        else:
+            raise ProgrammingError("Query parameters argument should be a "
+                                   "list, tuple, or dict object")
